@@ -2,6 +2,7 @@
 Expense Tracker — Streamlit app
 Username + password accounts (no email, ever). Each account has its own
 private budget and expense history, stored locally in expense_tracker.db.
+5 Themes: Light & Fresh, Dark & Modern, Soft Pastel & Cute, Gradient Hero, Minimal & Clean
 """
 
 import streamlit as st
@@ -22,41 +23,140 @@ CATEGORY_ICONS = {
     "Fun": "🎬", "Health": "💊", "Shopping": "🛍️", "Other": "📒",
 }
 
+# --- THEMES ---
+THEMES = {
+    "1. Light & Fresh": {
+        "bg": "#E8F5E9", "card": "#FFFFFF", "primary": "#2E7D32", "primary2": "#43A047",
+        "text": "#1B5E20", "secondary_text": "#558B2F", "input_bg": "#F1F8E9", "info_bg": "#C8E6C9"
+    },
+    "2. Dark & Modern": {
+        "bg": "#0A0E27", "card": "#1A1F3D", "primary": "#7C4DFF", "primary2": "#00BFFF",
+        "text": "#FFFFFF", "secondary_text": "#8B9BB4", "input_bg": "#242B4D", "info_bg": "#1E2A5A"
+    },
+    "3. Soft Pastel & Cute": {
+        "bg": "#FFF0F0", "card": "#FFFFFF", "primary": "#FF6B6B", "primary2": "#FF8E8E",
+        "text": "#4A2C2C", "secondary_text": "#9B6B6B", "input_bg": "#FFF5F5", "info_bg": "#FFE0E0"
+    },
+    "4. Gradient Hero": {
+        "bg": "linear-gradient(135deg, #667eea 0%, #764ba2 50%, #f093fb 100%)",
+        "card": "#FFFFFF", "primary": "#6C3CE0", "primary2": "#8B5CF6",
+        "text": "#2D1B69", "secondary_text": "#7C6AAA", "input_bg": "#F5F3FF", "info_bg": "#EDE9FE"
+    },
+    "5. Minimal & Clean": {
+        "bg": "#FAFAF7", "card": "#FFFFFF", "primary": "#1A2E1A", "primary2": "#2D4A2D",
+        "text": "#1A1A1A", "secondary_text": "#6B6B6B", "input_bg": "#F5F5F0", "info_bg": "#E8EDE8"
+    }
+}
 
 def rupees(amount):
     return f"₹{amount:,.2f}"
 
-
 def current_month():
     return datetime.now().strftime("%Y-%m")
-
 
 def month_label(key):
     return datetime.strptime(key, "%Y-%m").strftime("%B %Y")
 
+def apply_theme(theme_name):
+    t = THEMES[theme_name]
+    is_gradient = "gradient" in t["bg"]
+    bg_css = f"background: {t['bg']};" if is_gradient else f"background-color: {t['bg']};"
+
+    st.markdown(f"""
+    <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+   .stApp {{ {bg_css} font-family: 'Inter', sans-serif; }}
+
+    /* Card */
+   .login-card {{
+        background: {t['card']};
+        border-radius: 24px;
+        padding: 32px 28px;
+        box-shadow: 0 10px 40px rgba(0,0,0,0.08);
+        border: 1px solid rgba(0,0,0,0.05);
+        margin-top: 20px;
+    }}
+   .brand-title {{ font-size: 32px; font-weight: 800; color: {t['text']}; line-height: 1.1; }}
+   .brand-title span {{ color: {t['primary']}; }}
+   .brand-subtitle {{ color: {t['secondary_text']}; font-size: 13px; margin-top: 8px; margin-bottom: 24px; }}
+
+    /* Inputs */
+   .stTextInput>div>div>input {{
+        background-color: {t['input_bg']}!important;
+        border-radius: 12px!important;
+        border: 1px solid transparent!important;
+        color: {t['text']}!important;
+    }}
+    /* Buttons */
+   .stButton>button[kind="primary"] {{
+        background: linear-gradient(90deg, {t['primary']} 0%, {t['primary2']} 100%)!important;
+        color: white!important;
+        border-radius: 12px!important;
+        border: none!important;
+        font-weight: 600!important;
+        height: 48px!important;
+    }}
+   .stButton>button {{ border-radius: 12px!important; height: 44px!important; }}
+
+    /* Tabs */
+   .stTabs [data-baseweb="tab-list"] {{ gap: 8px; }}
+   .stTabs [data-baseweb="tab"] {{
+        border-radius: 20px; padding: 6px 18px; background: {t['input_bg']};
+    }}
+   .stTabs [aria-selected="true"] {{ background: {t['card']}!important; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }}
+
+    /* Info box */
+   .stAlert {{ background-color: {t['info_bg']}!important; border-radius: 12px!important; border: none!important; }}
+    </style>
+    """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------------------------
 # Session state
 # ---------------------------------------------------------------------------
-
 if "username" not in st.session_state:
     st.session_state.username = None
+if "theme" not in st.session_state:
+    st.session_state.theme = "5. Minimal & Clean"
+
+# Theme selector - always visible
+top_c1, top_c2 = st.columns([3, 1])
+with top_c2:
+    selected = st.selectbox("Theme", list(THEMES.keys()), index=list(THEMES.keys()).index(st.session_state.theme), label_visibility="collapsed")
+    st.session_state.theme = selected
+
+apply_theme(st.session_state.theme)
+t = THEMES[st.session_state.theme]
 
 # ---------------------------------------------------------------------------
-# Auth screen
+# Auth screen - Now matching your Figma
 # ---------------------------------------------------------------------------
-
 def auth_screen():
-    st.title("💰 Expense Tracker")
-    st.caption("No email or phone number is ever asked for — just a username and password.")
+    # Header matching image
+    col1, col2 = st.columns([3,1])
+    with col1:
+        st.markdown(f"""
+        <div style="display:flex; align-items:center; gap:12px;">
+            <div style="font-size:42px;">💰</div>
+            <div>
+                <div class="brand-title">Expense<br><span>Tracker</span></div>
+            </div>
+        </div>
+        <div class="brand-subtitle">No email or phone number is ever asked for —<br>just a username and password.</div>
+        """, unsafe_allow_html=True)
+    with col2:
+        st.markdown(f"<div style='text-align:right; color:{t['secondary_text']}; font-size:12px; margin-top:10px;'>Simple • Secure • Yours<br><span style='color:{t['primary']};'>Your Money<br>Your Control</span></div>", unsafe_allow_html=True)
+
+    st.markdown('<div class="login-card">', unsafe_allow_html=True)
 
     tab_login, tab_signup = st.tabs(["Log in", "Sign up"])
 
     with tab_login:
         with st.form("login_form"):
-            username = st.text_input("Username", key="login_username")
-            password = st.text_input("Password", type="password", key="login_password")
-            submitted = st.form_submit_button("Log in", width='stretch', type="primary")
+            st.markdown(f"<p style='font-size:13px; font-weight:600; color:{t['text']}; margin-bottom:4px;'>Username</p>", unsafe_allow_html=True)
+            username = st.text_input("Username", placeholder="Enter your username", label_visibility="collapsed", key="login_username")
+            st.markdown(f"<p style='font-size:13px; font-weight:600; color:{t['text']}; margin:8px 0 4px;'>Password</p>", unsafe_allow_html=True)
+            password = st.text_input("Password", type="password", placeholder="Enter your password", label_visibility="collapsed", key="login_password")
+            submitted = st.form_submit_button("Log in →", width='stretch', type="primary")
             if submitted:
                 try:
                     resolved = db.verify_login(username, password)
@@ -67,13 +167,14 @@ def auth_screen():
 
     with tab_signup:
         with st.form("signup_form"):
-            username = st.text_input("Choose a username", key="signup_username")
-            password = st.text_input("Choose a password", type="password", key="signup_password",
-                                      help="At least 6 characters")
-            confirm = st.text_input("Confirm password", type="password", key="signup_confirm")
+            st.markdown(f"<p style='font-size:13px; font-weight:600; color:{t['text']}; margin-bottom:4px;'>Username</p>", unsafe_allow_html=True)
+            username = st.text_input("Choose a username", placeholder="Choose a username", label_visibility="collapsed", key="signup_username")
+            st.markdown(f"<p style='font-size:13px; font-weight:600; color:{t['text']}; margin:8px 0 4px;'>Password</p>", unsafe_allow_html=True)
+            password = st.text_input("Choose a password", type="password", placeholder="At least 6 characters", label_visibility="collapsed", key="signup_password", help="At least 6 characters")
+            confirm = st.text_input("Confirm password", type="password", placeholder="Confirm password", label_visibility="collapsed", key="signup_confirm")
             submitted = st.form_submit_button("Create account", width='stretch', type="primary")
             if submitted:
-                if password != confirm:
+                if password!= confirm:
                     st.error("Passwords don't match.")
                 else:
                     try:
@@ -83,17 +184,17 @@ def auth_screen():
                     except ValueError as e:
                         st.error(str(e))
 
+    st.markdown('</div>', unsafe_allow_html=True)
+
     st.info(
         "Heads up: since no email or phone is collected, there's no automated "
         "password recovery. If you forget your password, you'll need a new account.",
         icon="ℹ️",
     )
 
-
 # ---------------------------------------------------------------------------
-# Onboarding (first login, or a new month with no budget set yet)
+# Rest of your app (same logic, just themed)
 # ---------------------------------------------------------------------------
-
 def onboarding_screen(username, month):
     st.title("💰 Expense Tracker")
     st.subheader(f"Set up {month_label(month)}")
@@ -111,11 +212,6 @@ def onboarding_screen(username, month):
                 db.set_budget(username, month, budget, savings)
                 st.rerun()
 
-
-# ---------------------------------------------------------------------------
-# Main app
-# ---------------------------------------------------------------------------
-
 def main_app(username, month):
     settings = db.get_budget(username, month)
 
@@ -124,7 +220,6 @@ def main_app(username, month):
         if st.button("Log out", width='stretch'):
             st.session_state.username = None
             st.rerun()
-
         st.divider()
         st.markdown(f"**Edit budget for {month_label(month)}**")
         with st.form("edit_budget_form"):
@@ -150,21 +245,17 @@ def main_app(username, month):
         ["🏠 Home", "➕ Add", "📜 History", "📅 Calendar", "📊 Categories"]
     )
 
-    # ------------------------------ HOME ------------------------------
     with tab_home:
         c1, c2 = st.columns(2)
         c1.metric("Remaining this month", rupees(remaining))
         c2.metric("Spent so far", rupees(spent))
-
         pct_used = min(1.0, spent / settings["budget"]) if settings["budget"] > 0 else 0
         st.progress(pct_used)
         if remaining < 0:
             st.warning(f"You've gone {rupees(abs(remaining))} over budget this month.")
-
         c3, c4 = st.columns(2)
         c3.metric("Saving goal", rupees(settings["savings"]))
         c4.metric("Daily avg", rupees(daily_avg))
-
         st.markdown("#### Recent entries")
         recent = month_expenses[:5]
         if not recent:
@@ -177,7 +268,6 @@ def main_app(username, month):
                 col_a.write(f"{icon} **{e['description']}** — {e['category']} · {dt.strftime('%d %b, %I:%M %p')}")
                 col_b.write(rupees(e["amount"]))
 
-    # ------------------------------ ADD ------------------------------
     with tab_add:
         with st.form("add_expense_form", clear_on_submit=True):
             description = st.text_input("What was it for")
@@ -194,10 +284,9 @@ def main_app(username, month):
                     st.success("Expense added!")
                     st.rerun()
 
-    # ------------------------------ HISTORY ------------------------------
     with tab_history:
         if not all_expenses:
-            st.caption("Nothing recorded yet. Every entry you add will show up here, across all months.")
+            st.caption("Nothing recorded yet.")
         else:
             df = pd.DataFrame(all_expenses)
             df["occurred_at"] = pd.to_datetime(df["occurred_at"])
@@ -210,11 +299,9 @@ def main_app(username, month):
             })
             st.dataframe(df_display, width='stretch', hide_index=True)
 
-    # ------------------------------ CALENDAR ------------------------------
     with tab_calendar:
         render_calendar_tab(username, month, daily_avg, all_expenses)
 
-    # ------------------------------ CATEGORIES ------------------------------
     with tab_categories:
         if not month_expenses:
             st.caption("No spending logged this month yet.")
@@ -224,34 +311,23 @@ def main_app(username, month):
                 cat_totals[e["category"]] = cat_totals.get(e["category"], 0) + e["amount"]
             cat_items = sorted(cat_totals.items(), key=lambda x: -x[1])
             cat_df = pd.DataFrame(cat_items, columns=["Category", "Amount"])
-
-            fig = px.pie(
-                cat_df, names="Category", values="Amount", hole=0.45,
-                color="Category",
-            )
+            fig = px.pie(cat_df, names="Category", values="Amount", hole=0.45, color="Category",)
             fig.update_traces(textposition="inside", textinfo="percent+label")
-            fig.update_layout(showlegend=True, margin=dict(t=10, b=10, l=10, r=10))
+            fig.update_layout(showlegend=True, margin=dict(t=10, b=10, l=10, r=10), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
             st.plotly_chart(fig, width='stretch')
-
             for cat, amt in cat_items:
                 icon = CATEGORY_ICONS.get(cat, "📒")
                 st.write(f"{icon} **{cat}** — {rupees(amt)}")
 
-
-# ---------------------------------------------------------------------------
-# Calendar tab
-# ---------------------------------------------------------------------------
-
 def render_calendar_tab(username, month, daily_avg, all_expenses):
     if "calendar_view_month" not in st.session_state:
-        st.session_state.calendar_view_month = month  # 'YYYY-MM'
+        st.session_state.calendar_view_month = month
     if "calendar_selected_day" not in st.session_state:
-        st.session_state.calendar_selected_day = None  # 'YYYY-MM-DD'
+        st.session_state.calendar_selected_day = None
 
     view_month = st.session_state.calendar_view_month
     year, mon = map(int, view_month.split("-"))
 
-    # --- month navigation ---
     nav_prev, nav_label, nav_next = st.columns([1, 3, 1])
     if nav_prev.button("◀", key="cal_prev", width='stretch'):
         prev_year, prev_mon = (year - 1, 12) if mon == 1 else (year, mon - 1)
@@ -265,13 +341,9 @@ def render_calendar_tab(username, month, daily_avg, all_expenses):
         st.session_state.calendar_selected_day = None
         st.rerun()
 
-    # Daily avg only really applies to the month it was set for.
     view_settings = db.get_budget(username, view_month)
-    view_daily_avg = (
-        (view_settings["budget"] - view_settings["savings"]) / 30 if view_settings else None
-    )
+    view_daily_avg = ((view_settings["budget"] - view_settings["savings"]) / 30 if view_settings else None)
 
-    # Totals per day for this displayed month
     day_totals = {}
     for e in all_expenses:
         if e["occurred_at"][:7] == view_month:
@@ -279,9 +351,9 @@ def render_calendar_tab(username, month, daily_avg, all_expenses):
             day_totals[day_key] = day_totals.get(day_key, 0) + e["amount"]
 
     if view_daily_avg is None:
-        st.caption("No budget was set for this month, so there's nothing to compare days against.")
+        st.caption("No budget was set for this month.")
     else:
-        st.caption(f"Days spending over {rupees(view_daily_avg)} (this month's Daily Avg) are shown in red.")
+        st.caption(f"Days spending over {rupees(view_daily_avg)} are shown in red.")
 
     weekday_cols = st.columns(7)
     for col, name in zip(weekday_cols, ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]):
@@ -300,11 +372,9 @@ def render_calendar_tab(username, month, daily_avg, all_expenses):
             day_total = day_totals.get(day_key, 0)
             is_over = view_daily_avg is not None and day_total > view_daily_avg
             is_today = day_key == today_str
-
             label = str(day_num)
             if day_total > 0:
                 label += " 🔴" if is_over else " •"
-
             btn_type = "primary" if is_over else ("secondary" if is_today else "tertiary")
             if col.button(label, key=f"cal_day_{day_key}", width='stretch', type=btn_type):
                 st.session_state.calendar_selected_day = day_key
@@ -329,11 +399,9 @@ def render_calendar_tab(username, month, daily_avg, all_expenses):
     else:
         st.caption("Tap a day above to see what you spent on it.")
 
-
 # ---------------------------------------------------------------------------
 # Router
 # ---------------------------------------------------------------------------
-
 if st.session_state.username is None:
     auth_screen()
 else:
