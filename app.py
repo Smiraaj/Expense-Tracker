@@ -216,6 +216,7 @@ def main_app(username, month):
                     st.rerun()
 
     # HISTORY
+       # HISTORY
     with tab_history:
         if not all_expenses:
             st.caption("Nothing recorded yet.")
@@ -225,3 +226,8 @@ def main_app(username, month):
             df = df.sort_values("occurred_at", ascending=False)
             df_display = pd.DataFrame({
                 "Date & time": df["occurred_at"].dt.strftime("%d %b %Y, %I:%M %p"),
+                "Description": df["description"],
+                "Category": df["category"],
+                "Amount": df["amount"].apply(rupees),
+            })
+            st.dataframe(df_display, width='stretch', hide_index=True)
