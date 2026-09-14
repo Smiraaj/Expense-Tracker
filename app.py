@@ -1,58 +1,16 @@
+"""
+Expense Tracker — Streamlit app
+Username + password accounts (no email, ever). Each account has its own
+private budget and expense history, stored locally in expense_tracker.db.
+"""
+
 import streamlit as st
 from datetime import datetime
-import calendar as cal_module
 import pandas as pd
-import plotly.express as px
 
 import database as db
 
-# ---------------- CONFIG ----------------
-st.set_page_config(
-    page_title="Expense Tracker",
-    page_icon="💰",
-    layout="centered",
-    initial_sidebar_state="expanded"
-)
-
-# Dark & Modern theme styling
-st.markdown(
-    """
-    <style>
-    body {
-        background-color: #0e1117;
-        color: #e0e0e0;
-    }
-    .stApp {
-        background-color: #0e1117;
-    }
-    h1, h2, h3, h4, h5, h6 {
-        color: #a3c4f3;
-    }
-    .stButton>button {
-        background: linear-gradient(90deg, #4a00e0, #8e2de2);
-        color: white;
-        border-radius: 8px;
-        padding: 0.6em 1.2em;
-        font-weight: 600;
-    }
-    .stTextInput>div>div>input, .stNumberInput>div>div>input {
-        background-color: #1c1f26;
-        color: #e0e0e0;
-        border-radius: 6px;
-    }
-    .stTabs [data-baseweb="tab"] {
-        background-color: #1c1f26;
-        color: #a3c4f3;
-    }
-    .stTabs [aria-selected="true"] {
-        background: linear-gradient(90deg, #4a00e0, #8e2de2);
-        color: white !important;
-        border-radius: 6px;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True
-)
+st.set_page_config(page_title="Expense Tracker", page_icon="💰", layout="centered")
 
 db.init_db()
 
@@ -62,18 +20,29 @@ CATEGORY_ICONS = {
     "Fun": "🎬", "Health": "💊", "Shopping": "🛍️", "Other": "📒",
 }
 
+
 def rupees(amount):
     return f"₹{amount:,.2f}"
+
 
 def current_month():
     return datetime.now().strftime("%Y-%m")
 
+
 def month_label(key):
     return datetime.strptime(key, "%Y-%m").strftime("%B %Y")
 
-# ---------------- AUTH ----------------
+
+# ---------------------------------------------------------------------------
+# Session state
+# ---------------------------------------------------------------------------
+
 if "username" not in st.session_state:
     st.session_state.username = None
+
+# ---------------------------------------------------------------------------
+# Auth screen
+# ---------------------------------------------------------------------------
 
 def auth_screen():
     st.title("💰 Expense Tracker")
@@ -85,7 +54,7 @@ def auth_screen():
         with st.form("login_form"):
             username = st.text_input("Username", key="login_username")
             password = st.text_input("Password", type="password", key="login_password")
-            submitted = st.form_submit_button("Log in")
+            submitted = st.form_submit_button("Log in", width='stretch', type="primary")
             if submitted:
                 try:
                     resolved = db.verify_login(username, password)
@@ -100,7 +69,7 @@ def auth_screen():
             password = st.text_input("Choose a password", type="password", key="signup_password",
                                       help="At least 6 characters")
             confirm = st.text_input("Confirm password", type="password", key="signup_confirm")
-            submitted = st.form_submit_button("Create account")
+            submitted = st.form_submit_button("Create account", width='stretch', type="primary")
             if submitted:
                 if password != confirm:
                     st.error("Passwords don't match.")
@@ -118,7 +87,11 @@ def auth_screen():
         icon="ℹ️",
     )
 
-# ---------------- ONBOARDING ----------------
+
+# ---------------------------------------------------------------------------
+# Onboarding (first login, or a new month with no budget set yet)
+# ---------------------------------------------------------------------------
+
 def onboarding_screen(username, month):
     st.title("💰 Expense Tracker")
     st.subheader(f"Set up {month_label(month)}")
@@ -128,7 +101,7 @@ def onboarding_screen(username, month):
     with st.form("onboard_form"):
         budget = st.number_input("Monthly budget (₹)", min_value=1.0, step=100.0)
         savings = st.number_input("Saving goal (₹)", min_value=0.0, step=100.0)
-        submitted = st.form_submit_button("Start tracking")
+        submitted = st.form_submit_button("Start tracking", width='stretch', type="primary")
         if submitted:
             if budget <= 0:
                 st.error("Enter a valid monthly budget.")
@@ -136,13 +109,17 @@ def onboarding_screen(username, month):
                 db.set_budget(username, month, budget, savings)
                 st.rerun()
 
-# ---------------- MAIN APP ----------------
+
+# ---------------------------------------------------------------------------
+# Main app
+# ---------------------------------------------------------------------------
+
 def main_app(username, month):
     settings = db.get_budget(username, month)
 
     with st.sidebar:
         st.markdown(f"### 👤 {username}")
-        if st.button("Log out"):
+        if st.button("Log out", width='stretch'):
             st.session_state.username = None
             st.rerun()
 
@@ -153,7 +130,7 @@ def main_app(username, month):
                                           value=float(settings["budget"]))
             new_savings = st.number_input("Saving goal (₹)", min_value=0.0, step=100.0,
                                            value=float(settings["savings"]))
-            if st.form_submit_button("Save"):
+            if st.form_submit_button("Save", width='stretch'):
                 db.set_budget(username, month, new_budget, new_savings)
                 st.rerun()
 
@@ -167,11 +144,11 @@ def main_app(username, month):
     st.title("💰 Expense Tracker")
     st.caption(month_label(month))
 
-    tab_home, tab_add, tab_history, tab_calendar, tab_categories = st.tabs(
-        ["🏠 Home", "➕ Add", "📜 History", "📅 Calendar", "📊 Categories"]
+    tab_home, tab_add, tab_history, tab_categories = st.tabs(
+        ["🏠 Home", "➕ Add", "📜 History", "📊 Categories"]
     )
 
-    # HOME
+    # ------------------------------ HOME ------------------------------
     with tab_home:
         c1, c2 = st.columns(2)
         c1.metric("Remaining this month", rupees(remaining))
@@ -198,13 +175,13 @@ def main_app(username, month):
                 col_a.write(f"{icon} **{e['description']}** — {e['category']} · {dt.strftime('%d %b, %I:%M %p')}")
                 col_b.write(rupees(e["amount"]))
 
-    # ADD
+    # ------------------------------ ADD ------------------------------
     with tab_add:
         with st.form("add_expense_form", clear_on_submit=True):
             description = st.text_input("What was it for")
             category = st.selectbox("Category", CATEGORIES)
             amount = st.number_input("Amount (₹)", min_value=0.01, step=10.0)
-            submitted = st.form_submit_button("Add to ledger")
+            submitted = st.form_submit_button("Add to ledger", width='stretch', type="primary")
             if submitted:
                 if not description.strip():
                     st.error("Add a short description for this expense.")
@@ -215,11 +192,10 @@ def main_app(username, month):
                     st.success("Expense added!")
                     st.rerun()
 
-    # HISTORY
-       # HISTORY
+    # ------------------------------ HISTORY ------------------------------
     with tab_history:
         if not all_expenses:
-            st.caption("Nothing recorded yet.")
+            st.caption("Nothing recorded yet. Every entry you add will show up here, across all months.")
         else:
             df = pd.DataFrame(all_expenses)
             df["occurred_at"] = pd.to_datetime(df["occurred_at"])
@@ -231,3 +207,34 @@ def main_app(username, month):
                 "Amount": df["amount"].apply(rupees),
             })
             st.dataframe(df_display, width='stretch', hide_index=True)
+
+    # ------------------------------ CATEGORIES ------------------------------
+    with tab_categories:
+        if not month_expenses:
+            st.caption("No spending logged this month yet.")
+        else:
+            cat_totals = {}
+            for e in month_expenses:
+                cat_totals[e["category"]] = cat_totals.get(e["category"], 0) + e["amount"]
+            cat_df = pd.DataFrame(
+                sorted(cat_totals.items(), key=lambda x: -x[1]), columns=["Category", "Amount"]
+            ).set_index("Category")
+            st.bar_chart(cat_df)
+            for cat, amt in sorted(cat_totals.items(), key=lambda x: -x[1]):
+                icon = CATEGORY_ICONS.get(cat, "📒")
+                st.write(f"{icon} **{cat}** — {rupees(amt)}")
+
+
+# ---------------------------------------------------------------------------
+# Router
+# ---------------------------------------------------------------------------
+
+if st.session_state.username is None:
+    auth_screen()
+else:
+    _month = current_month()
+    _settings = db.get_budget(st.session_state.username, _month)
+    if _settings is None:
+        onboarding_screen(st.session_state.username, _month)
+    else:
+        main_app(st.session_state.username, _month)
