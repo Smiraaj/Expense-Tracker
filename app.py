@@ -1,481 +1,407 @@
 """
-Expense Tracker — Streamlit app
-Username + password accounts (no email, ever). Each account has its own
-private budget and expense history, stored locally in expense_tracker.db.
+Database layer for Expense Tracker.
+Uses a local SQLite file (expense_tracker.db) - no external service needed.
+Every function is careful to only touch the data belonging to the given
+username, so multiple people can safely share one deployment.
 """
 
-import streamlit as st
+import sqlite3
+import bcrypt
 from datetime import datetime
-import calendar as cal_module
-import pandas as pd
-import plotly.express as px
+from contextlib import contextmanager
 
-import database as db
-
-st.set_page_config(page_title="Expense Tracker", page_icon="💰", layout="centered")
+DB_PATH = "expense_tracker.db"
 
 
-def inject_dark_modern_css():
-    st.markdown("""
-    <style>
-    .stButton > button[kind="primary"],
-    [data-testid="stFormSubmitButton"] button[kind="primary"],
-    [data-testid="baseButton-primary"],
-    [data-testid="baseButton-primaryFormSubmit"] {
-        background: linear-gradient(90deg, #7C6FF0, #4A90E2) !important;
-        border: none !important;
-        color: #FFFFFF !important;
-    }
-    .stButton > button[kind="primary"]:hover,
-    [data-testid="stFormSubmitButton"] button[kind="primary"]:hover {
-        opacity: 0.92;
-    }
-    [data-baseweb="tab-list"] {
-        gap: 4px;
-        background: #161B45;
-        padding: 4px;
-        border-radius: 999px;
-    }
-    [data-baseweb="tab"] {
-        border-radius: 999px !important;
-        padding: 6px 18px !important;
-    }
-    [aria-selected="true"][data-baseweb="tab"] {
-        background: linear-gradient(90deg, #7C6FF0, #4A90E2) !important;
-        color: #FFFFFF !important;
-    }
-    .app-header-title {
-        font-size: 28px;
-        font-weight: 700;
-        margin: 0;
-    }
-    .app-header-title .accent {
-        background: linear-gradient(90deg, #7C6FF0, #4A90E2);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-    }
-    .app-header-tagline {
-        font-size: 12px;
-        color: #9AA0C3;
-        text-align: right;
-        line-height: 1.4;
-    }
-    /* Keep columns side-by-side on narrow phone screens instead of stacking
-       vertically - this is what fixes the calendar grid on mobile. */
-    [data-testid="stHorizontalBlock"] {
-        flex-wrap: nowrap !important;
-        gap: 4px !important;
-    }
-    [data-testid="stHorizontalBlock"] > [data-testid="column"] {
-        min-width: 0 !important;
-        width: 100% !important;
-        flex: 1 1 0 !important;
-    }
-    @media (max-width: 480px) {
-        [data-testid="stButton"] button {
-            padding: 0.25rem 0.15rem !important;
-            font-size: 12px !important;
-            min-height: 2.2rem !important;
-        }
-    }
-    </style>
-    """, unsafe_allow_html=True)
+@contextmanager
+def get_conn():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    try:
+        yield conn
+        conn.commit()
+    finally:
+        conn.close()
 
 
-inject_dark_modern_css()
-
-db.init_db()
-
-CATEGORIES = ["Food", "Transport", "Rent", "Bills", "Fun", "Health", "Shopping", "Other"]
-CATEGORY_ICONS = {
-    "Food": "🍛", "Transport": "🚌", "Rent": "🏠", "Bills": "💡",
-    "Fun": "🎬", "Health": "💊", "Shopping": "🛍️", "Other": "📒",
-}
-
-
-CURRENCIES = {
-    "INR": {"symbol": "₹", "label": "Indian Rupee (₹)"},
-    "USD": {"symbol": "$", "label": "US Dollar ($)"},
-    "GBP": {"symbol": "£", "label": "British Pound (£)"},
-    "EUR": {"symbol": "€", "label": "Euro (€) — most of Europe"},
-    "AED": {"symbol": "AED ", "label": "UAE Dirham (AED) — Dubai/UAE"},
-    "CAD": {"symbol": "CA$", "label": "Canadian Dollar (CA$)"},
-    "DKK": {"symbol": "kr", "label": "Danish Krone (kr)"},
-    "AUD": {"symbol": "A$", "label": "Australian Dollar (A$)"},
-    "SGD": {"symbol": "S$", "label": "Singapore Dollar (S$)"},
-    "JPY": {"symbol": "¥", "label": "Japanese Yen (¥)", "decimals": 0},
-}
-DEFAULT_CURRENCY = "INR"
-
-
-def format_money(amount, currency_code):
-    info = CURRENCIES.get(currency_code, CURRENCIES[DEFAULT_CURRENCY])
-    decimals = info.get("decimals", 2)
-    return f"{info['symbol']}{amount:,.{decimals}f}"
-
-
-def current_month():
-    return datetime.now().strftime("%Y-%m")
-
-
-def month_label(key):
-    return datetime.strptime(key, "%Y-%m").strftime("%B %Y")
+def init_db():
+    with get_conn() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                username TEXT PRIMARY KEY,
+                password_hash TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+        """)
+        # Migration: add a currency column for accounts created before this
+        # feature existed. Safe to run every time - it's a no-op once added.
+        try:
+            conn.execute("ALTER TABLE users ADD COLUMN currency TEXT NOT NULL DEFAULT 'INR'")
+        except sqlite3.OperationalError:
+            pass  # column already exists
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS expenses (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL REFERENCES users(username) ON DELETE CASCADE,
+                description TEXT NOT NULL,
+                category TEXT NOT NULL,
+                amount REAL NOT NULL CHECK (amount > 0),
+                occurred_at TEXT NOT NULL
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS budgets (
+                username TEXT NOT NULL REFERENCES users(username) ON DELETE CASCADE,
+                month TEXT NOT NULL,
+                budget REAL NOT NULL CHECK (budget > 0),
+                savings REAL NOT NULL DEFAULT 0 CHECK (savings >= 0),
+                PRIMARY KEY (username, month)
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS day_notes (
+                username TEXT NOT NULL REFERENCES users(username) ON DELETE CASCADE,
+                day TEXT NOT NULL,
+                note TEXT NOT NULL DEFAULT '',
+                PRIMARY KEY (username, day)
+            )
+        """)
 
 
 # ---------------------------------------------------------------------------
-# Session state
+# Users / auth
 # ---------------------------------------------------------------------------
 
-if "username" not in st.session_state:
-    st.session_state.username = None
+def username_exists(username):
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM users WHERE lower(username) = lower(?)", (username,)
+        ).fetchone()
+        return row is not None
 
-# ---------------------------------------------------------------------------
-# Auth screen
-# ---------------------------------------------------------------------------
 
-def auth_screen():
-    header_left, header_right = st.columns([3, 2])
-    with header_left:
-        st.markdown(
-            '<p class="app-header-title">💰 Expense<br><span class="accent">Tracker</span></p>',
-            unsafe_allow_html=True,
-        )
-    with header_right:
-        st.markdown(
-            '<p class="app-header-tagline">Track Today<br>Build Tomorrow ↗</p>',
-            unsafe_allow_html=True,
+def create_user(username, password, currency="INR"):
+    username = username.strip()
+    if len(username) < 3:
+        raise ValueError("Username must be at least 3 characters.")
+    if len(password) < 6:
+        raise ValueError("Password must be at least 6 characters.")
+    if username_exists(username):
+        raise ValueError("That username is already taken.")
+
+    password_hash = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT INTO users (username, password_hash, created_at, currency) VALUES (?, ?, ?, ?)",
+            (username, password_hash, datetime.now().isoformat(), currency),
         )
 
-    st.caption("No email or phone number is ever asked for — just a username and password.")
 
-    tab_login, tab_signup = st.tabs(["Log in", "Sign up"])
+def get_currency(username):
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT currency FROM users WHERE username = ?", (username,)
+        ).fetchone()
+    return row["currency"] if row else "INR"
 
-    with tab_login:
-        with st.form("login_form"):
-            username = st.text_input("Username", key="login_username")
-            password = st.text_input("Password", type="password", key="login_password")
-            submitted = st.form_submit_button("Log in", width='stretch', type="primary")
-            if submitted:
-                try:
-                    resolved = db.verify_login(username, password)
-                    st.session_state.username = resolved
-                    st.rerun()
-                except ValueError as e:
-                    st.error(str(e))
 
-    with tab_signup:
-        with st.form("signup_form"):
-            username = st.text_input("Choose a username", key="signup_username")
-            password = st.text_input("Choose a password", type="password", key="signup_password",
-                                      help="At least 6 characters")
-            confirm = st.text_input("Confirm password", type="password", key="signup_confirm")
-            currency_code = st.selectbox(
-                "Your currency",
-                options=list(CURRENCIES.keys()),
-                format_func=lambda code: CURRENCIES[code]["label"],
-                key="signup_currency",
-                help="You can change this later from the sidebar.",
+def set_currency(username, currency):
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE users SET currency = ? WHERE username = ?", (currency, username)
+        )
+
+
+def verify_login(username, password):
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT username, password_hash FROM users WHERE lower(username) = lower(?)",
+            (username.strip(),),
+        ).fetchone()
+    if row is None:
+        raise ValueError("Incorrect username or password.")
+    if not bcrypt.checkpw(password.encode("utf-8"), row["password_hash"].encode("utf-8")):
+        raise ValueError("Incorrect username or password.")
+    return row["username"]  # canonical stored casing
+
+
+# ---------------------------------------------------------------------------
+# Expenses
+# ---------------------------------------------------------------------------
+
+def add_expense(username, description, category, amount):
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT INTO expenses (username, description, category, amount, occurred_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (username, description.strip(), category, round(float(amount), 2), datetime.now().isoformat()),
+        )
+
+
+def get_expenses(username):
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT id, description, category, amount, occurred_at "
+            "FROM expenses WHERE username = ? ORDER BY occurred_at DESC",
+            (username,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Budgets
+# ---------------------------------------------------------------------------
+
+def get_budget(username, month):
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT budget, savings FROM budgets WHERE username = ? AND month = ?",
+            (username, month),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def set_budget(username, month, budget, savings):
+    with get_conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO budgets (username, month, budget, savings) VALUES (?, ?, ?, ?)
+            ON CONFLICT(username, month) DO UPDATE SET budget = excluded.budget, savings = excluded.savings
+            """,
+            (username, month, budget, savings),
+        )
+
+
+# ---------------------------------------------------------------------------
+# Day notes (e.g. "outing day, that's why spending was high")
+# ---------------------------------------------------------------------------
+
+def get_day_note(username, day):
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT note FROM day_notes WHERE username = ? AND day = ?",
+            (username, day),
+        ).fetchone()
+    return row["note"] if row else ""
+
+
+def set_day_note(username, day, note):
+    note = note.strip()
+    with get_conn() as conn:
+        if note:
+            conn.execute(
+                """
+                INSERT INTO day_notes (username, day, note) VALUES (?, ?, ?)
+                ON CONFLICT(username, day) DO UPDATE SET note = excluded.note
+                """,
+                (username, day, note),
             )
-            submitted = st.form_submit_button("Create account", width='stretch', type="primary")
-            if submitted:
-                if password != confirm:
-                    st.error("Passwords don't match.")
-                else:
-                    try:
-                        db.create_user(username, password, currency=currency_code)
-                        st.session_state.username = username.strip()
-                        st.rerun()
-                    except ValueError as e:
-                        st.error(str(e))
+        else:
+            # An empty note means "nothing to show" - just remove the row.
+            conn.execute(
+                "DELETE FROM day_notes WHERE username = ? AND day = ?", (username, day)
+            )"""
+Database layer for Expense Tracker.
+Uses a local SQLite file (expense_tracker.db) - no external service needed.
+Every function is careful to only touch the data belonging to the given
+username, so multiple people can safely share one deployment.
+"""
 
-    st.info(
-        "Heads up: since no email or phone is collected, there's no automated "
-        "password recovery. If you forget your password, you'll need a new account.",
-        icon="ℹ️",
-    )
+import sqlite3
+import bcrypt
+from datetime import datetime
+from contextlib import contextmanager
 
-    st.markdown("""
-    <div style="display:flex; justify-content:flex-end; margin-top:24px; opacity:0.75;">
-        <svg width="120" height="70" viewBox="0 0 120 70">
-            <rect x="0" y="40" width="14" height="30" rx="2" fill="#4A90E2"/>
-            <rect x="20" y="25" width="14" height="45" rx="2" fill="#7C6FF0"/>
-            <rect x="40" y="10" width="14" height="60" rx="2" fill="#4A90E2"/>
-            <rect x="60" y="30" width="14" height="40" rx="2" fill="#7C6FF0"/>
-            <circle cx="100" cy="15" r="9" fill="#F5C542"/>
-            <circle cx="108" cy="25" r="9" fill="#F5C542"/>
-        </svg>
-    </div>
-    """, unsafe_allow_html=True)
+DB_PATH = "expense_tracker.db"
 
 
-# ---------------------------------------------------------------------------
-# Onboarding (first login, or a new month with no budget set yet)
-# ---------------------------------------------------------------------------
-
-def onboarding_screen(username, month, currency_code):
-    symbol = CURRENCIES.get(currency_code, CURRENCIES[DEFAULT_CURRENCY])["symbol"]
-    st.title("💰 Expense Tracker")
-    st.subheader(f"Set up {month_label(month)}")
-    st.write("A new month starts fresh. Set your budget and saving goal — last "
-             "month's ledger stays saved for you to look back on anytime.")
-
-    with st.form("onboard_form"):
-        budget = st.number_input(f"Monthly budget ({symbol})", min_value=1.0, step=100.0)
-        savings = st.number_input(f"Saving goal ({symbol})", min_value=0.0, step=100.0)
-        submitted = st.form_submit_button("Start tracking", width='stretch', type="primary")
-        if submitted:
-            if budget <= 0:
-                st.error("Enter a valid monthly budget.")
-            else:
-                db.set_budget(username, month, budget, savings)
-                st.rerun()
+@contextmanager
+def get_conn():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    try:
+        yield conn
+        conn.commit()
+    finally:
+        conn.close()
 
 
-# ---------------------------------------------------------------------------
-# Main app
-# ---------------------------------------------------------------------------
-
-def main_app(username, month):
-    settings = db.get_budget(username, month)
-    currency_code = db.get_currency(username)
-    symbol = CURRENCIES.get(currency_code, CURRENCIES[DEFAULT_CURRENCY])["symbol"]
-    money = lambda amount: format_money(amount, currency_code)
-
-    with st.sidebar:
-        st.markdown(f"### 👤 {username}")
-        if st.button("Log out", width='stretch'):
-            st.session_state.username = None
-            st.rerun()
-
-        st.divider()
-        st.markdown(f"**Edit budget for {month_label(month)}**")
-        with st.form("edit_budget_form"):
-            new_budget = st.number_input(f"Monthly budget ({symbol})", min_value=1.0, step=100.0,
-                                          value=float(settings["budget"]))
-            new_savings = st.number_input(f"Saving goal ({symbol})", min_value=0.0, step=100.0,
-                                           value=float(settings["savings"]))
-            if st.form_submit_button("Save", width='stretch'):
-                db.set_budget(username, month, new_budget, new_savings)
-                st.rerun()
-
-        st.divider()
-        st.markdown("**Currency**")
-        with st.form("currency_form"):
-            new_currency = st.selectbox(
-                "Preferred currency",
-                options=list(CURRENCIES.keys()),
-                index=list(CURRENCIES.keys()).index(currency_code) if currency_code in CURRENCIES else 0,
-                format_func=lambda code: CURRENCIES[code]["label"],
-                label_visibility="collapsed",
+def init_db():
+    with get_conn() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                username TEXT PRIMARY KEY,
+                password_hash TEXT NOT NULL,
+                created_at TEXT NOT NULL
             )
-            if st.form_submit_button("Update currency", width='stretch'):
-                db.set_currency(username, new_currency)
-                st.rerun()
-
-    all_expenses = db.get_expenses(username)
-    month_expenses = [e for e in all_expenses if e["occurred_at"][:7] == month]
-
-    spent = sum(e["amount"] for e in month_expenses)
-    remaining = settings["budget"] - spent
-    daily_avg = (settings["budget"] - settings["savings"]) / 30
-
-    st.title("💰 Expense Tracker")
-    st.caption(month_label(month))
-
-    tab_home, tab_add, tab_history, tab_calendar, tab_categories = st.tabs(
-        ["🏠 Home", "➕ Add", "📜 History", "📅 Calendar", "📊 Categories"]
-    )
-
-    # ------------------------------ HOME ------------------------------
-    with tab_home:
-        c1, c2 = st.columns(2)
-        c1.metric("Remaining this month", money(remaining))
-        c2.metric("Spent so far", money(spent))
-
-        pct_used = min(1.0, spent / settings["budget"]) if settings["budget"] > 0 else 0
-        st.progress(pct_used)
-        if remaining < 0:
-            st.warning(f"You've gone {money(abs(remaining))} over budget this month.")
-
-        c3, c4 = st.columns(2)
-        c3.metric("Saving goal", money(settings["savings"]))
-        c4.metric("Daily avg", money(daily_avg))
-
-        st.markdown("#### Recent entries")
-        recent = month_expenses[:5]
-        if not recent:
-            st.caption("No entries yet this month. Use the **Add** tab to log your first one.")
-        else:
-            for e in recent:
-                icon = CATEGORY_ICONS.get(e["category"], "📒")
-                dt = datetime.fromisoformat(e["occurred_at"])
-                col_a, col_b = st.columns([4, 1])
-                col_a.write(f"{icon} **{e['description']}** — {e['category']} · {dt.strftime('%d %b, %I:%M %p')}")
-                col_b.write(money(e["amount"]))
-
-    # ------------------------------ ADD ------------------------------
-    with tab_add:
-        with st.form("add_expense_form", clear_on_submit=True):
-            description = st.text_input("What was it for")
-            category = st.selectbox("Category", CATEGORIES)
-            amount = st.number_input(f"Amount ({symbol})", min_value=0.01, step=10.0)
-            submitted = st.form_submit_button("Add to ledger", width='stretch', type="primary")
-            if submitted:
-                if not description.strip():
-                    st.error("Add a short description for this expense.")
-                elif amount <= 0:
-                    st.error("Amount must be a positive number.")
-                else:
-                    db.add_expense(username, description, category, amount)
-                    st.success("Expense added!")
-                    st.rerun()
-
-    # ------------------------------ HISTORY ------------------------------
-    with tab_history:
-        if not all_expenses:
-            st.caption("Nothing recorded yet. Every entry you add will show up here, across all months.")
-        else:
-            df = pd.DataFrame(all_expenses)
-            df["occurred_at"] = pd.to_datetime(df["occurred_at"])
-            df = df.sort_values("occurred_at", ascending=False)
-            df_display = pd.DataFrame({
-                "Date & time": df["occurred_at"].dt.strftime("%d %b %Y, %I:%M %p"),
-                "Description": df["description"],
-                "Category": df["category"],
-                "Amount": df["amount"].apply(money),
-            })
-            st.dataframe(df_display, width='stretch', hide_index=True)
-
-    # ------------------------------ CALENDAR ------------------------------
-    with tab_calendar:
-        render_calendar_tab(username, month, daily_avg, all_expenses, money)
-
-    # ------------------------------ CATEGORIES ------------------------------
-    with tab_categories:
-        if not month_expenses:
-            st.caption("No spending logged this month yet.")
-        else:
-            cat_totals = {}
-            for e in month_expenses:
-                cat_totals[e["category"]] = cat_totals.get(e["category"], 0) + e["amount"]
-            cat_items = sorted(cat_totals.items(), key=lambda x: -x[1])
-            cat_df = pd.DataFrame(cat_items, columns=["Category", "Amount"])
-
-            fig = px.pie(
-                cat_df, names="Category", values="Amount", hole=0.45,
-                color="Category",
+        """)
+        # Migration: add a currency column for accounts created before this
+        # feature existed. Safe to run every time - it's a no-op once added.
+        try:
+            conn.execute("ALTER TABLE users ADD COLUMN currency TEXT NOT NULL DEFAULT 'INR'")
+        except sqlite3.OperationalError:
+            pass  # column already exists
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS expenses (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL REFERENCES users(username) ON DELETE CASCADE,
+                description TEXT NOT NULL,
+                category TEXT NOT NULL,
+                amount REAL NOT NULL CHECK (amount > 0),
+                occurred_at TEXT NOT NULL
             )
-            fig.update_traces(textposition="inside", textinfo="percent+label")
-            fig.update_layout(showlegend=True, margin=dict(t=10, b=10, l=10, r=10))
-            st.plotly_chart(fig, width='stretch')
-
-            for cat, amt in cat_items:
-                icon = CATEGORY_ICONS.get(cat, "📒")
-                st.write(f"{icon} **{cat}** — {money(amt)}")
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS budgets (
+                username TEXT NOT NULL REFERENCES users(username) ON DELETE CASCADE,
+                month TEXT NOT NULL,
+                budget REAL NOT NULL CHECK (budget > 0),
+                savings REAL NOT NULL DEFAULT 0 CHECK (savings >= 0),
+                PRIMARY KEY (username, month)
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS day_notes (
+                username TEXT NOT NULL REFERENCES users(username) ON DELETE CASCADE,
+                day TEXT NOT NULL,
+                note TEXT NOT NULL DEFAULT '',
+                PRIMARY KEY (username, day)
+            )
+        """)
 
 
 # ---------------------------------------------------------------------------
-# Calendar tab
+# Users / auth
 # ---------------------------------------------------------------------------
 
-def render_calendar_tab(username, month, daily_avg, all_expenses, money):
-    if "calendar_view_month" not in st.session_state:
-        st.session_state.calendar_view_month = month  # 'YYYY-MM'
-    if "calendar_selected_day" not in st.session_state:
-        st.session_state.calendar_selected_day = None  # 'YYYY-MM-DD'
+def username_exists(username):
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM users WHERE lower(username) = lower(?)", (username,)
+        ).fetchone()
+        return row is not None
 
-    view_month = st.session_state.calendar_view_month
-    year, mon = map(int, view_month.split("-"))
 
-    # --- month navigation ---
-    nav_prev, nav_label, nav_next = st.columns([1, 3, 1])
-    if nav_prev.button("◀", key="cal_prev", width='stretch'):
-        prev_year, prev_mon = (year - 1, 12) if mon == 1 else (year, mon - 1)
-        st.session_state.calendar_view_month = f"{prev_year}-{prev_mon:02d}"
-        st.session_state.calendar_selected_day = None
-        st.rerun()
-    nav_label.markdown(f"<h4 style='text-align:center'>{month_label(view_month)}</h4>", unsafe_allow_html=True)
-    if nav_next.button("▶", key="cal_next", width='stretch'):
-        next_year, next_mon = (year + 1, 1) if mon == 12 else (year, mon + 1)
-        st.session_state.calendar_view_month = f"{next_year}-{next_mon:02d}"
-        st.session_state.calendar_selected_day = None
-        st.rerun()
+def create_user(username, password, currency="INR"):
+    username = username.strip()
+    if len(username) < 3:
+        raise ValueError("Username must be at least 3 characters.")
+    if len(password) < 6:
+        raise ValueError("Password must be at least 6 characters.")
+    if username_exists(username):
+        raise ValueError("That username is already taken.")
 
-    # Daily avg only really applies to the month it was set for.
-    view_settings = db.get_budget(username, view_month)
-    view_daily_avg = (
-        (view_settings["budget"] - view_settings["savings"]) / 30 if view_settings else None
-    )
+    password_hash = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT INTO users (username, password_hash, created_at, currency) VALUES (?, ?, ?, ?)",
+            (username, password_hash, datetime.now().isoformat(), currency),
+        )
 
-    # Totals per day for this displayed month
-    day_totals = {}
-    for e in all_expenses:
-        if e["occurred_at"][:7] == view_month:
-            day_key = e["occurred_at"][:10]
-            day_totals[day_key] = day_totals.get(day_key, 0) + e["amount"]
 
-    if view_daily_avg is None:
-        st.caption("No budget was set for this month, so there's nothing to compare days against.")
-    else:
-        st.caption(f"Days spending over {money(view_daily_avg)} (this month's Daily Avg) are shown in red.")
+def get_currency(username):
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT currency FROM users WHERE username = ?", (username,)
+        ).fetchone()
+    return row["currency"] if row else "INR"
 
-    weekday_cols = st.columns(7)
-    for col, name in zip(weekday_cols, ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]):
-        col.markdown(f"<div style='text-align:center;color:#888;font-size:12px'>{name}</div>", unsafe_allow_html=True)
 
-    weeks = cal_module.monthcalendar(year, mon)
-    today_str = datetime.now().strftime("%Y-%m-%d")
+def set_currency(username, currency):
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE users SET currency = ? WHERE username = ?", (currency, username)
+        )
 
-    for week in weeks:
-        cols = st.columns(7)
-        for col, day_num in zip(cols, week):
-            if day_num == 0:
-                col.write("")
-                continue
-            day_key = f"{view_month}-{day_num:02d}"
-            day_total = day_totals.get(day_key, 0)
-            is_over = view_daily_avg is not None and day_total > view_daily_avg
-            is_today = day_key == today_str
 
-            label = str(day_num)
-            if day_total > 0:
-                label += " 🔴" if is_over else " •"
+def verify_login(username, password):
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT username, password_hash FROM users WHERE lower(username) = lower(?)",
+            (username.strip(),),
+        ).fetchone()
+    if row is None:
+        raise ValueError("Incorrect username or password.")
+    if not bcrypt.checkpw(password.encode("utf-8"), row["password_hash"].encode("utf-8")):
+        raise ValueError("Incorrect username or password.")
+    return row["username"]  # canonical stored casing
 
-            btn_type = "primary" if is_over else ("secondary" if is_today else "tertiary")
-            if col.button(label, key=f"cal_day_{day_key}", width='stretch', type=btn_type):
-                st.session_state.calendar_selected_day = day_key
-                st.rerun()
 
-    st.divider()
-    selected = st.session_state.calendar_selected_day
-    if selected and selected[:7] == view_month:
-        day_expenses = [e for e in all_expenses if e["occurred_at"][:10] == selected]
-        pretty_date = datetime.strptime(selected, "%Y-%m-%d").strftime("%d %B %Y")
-        day_total = sum(e["amount"] for e in day_expenses)
-        st.markdown(f"#### {pretty_date} — {money(day_total)}")
-        if not day_expenses:
-            st.caption("No expenses logged on this day.")
+# ---------------------------------------------------------------------------
+# Expenses
+# ---------------------------------------------------------------------------
+
+def add_expense(username, description, category, amount):
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT INTO expenses (username, description, category, amount, occurred_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (username, description.strip(), category, round(float(amount), 2), datetime.now().isoformat()),
+        )
+
+
+def get_expenses(username):
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT id, description, category, amount, occurred_at "
+            "FROM expenses WHERE username = ? ORDER BY occurred_at DESC",
+            (username,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Budgets
+# ---------------------------------------------------------------------------
+
+def get_budget(username, month):
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT budget, savings FROM budgets WHERE username = ? AND month = ?",
+            (username, month),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def set_budget(username, month, budget, savings):
+    with get_conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO budgets (username, month, budget, savings) VALUES (?, ?, ?, ?)
+            ON CONFLICT(username, month) DO UPDATE SET budget = excluded.budget, savings = excluded.savings
+            """,
+            (username, month, budget, savings),
+        )
+
+
+# ---------------------------------------------------------------------------
+# Day notes (e.g. "outing day, that's why spending was high")
+# ---------------------------------------------------------------------------
+
+def get_day_note(username, day):
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT note FROM day_notes WHERE username = ? AND day = ?",
+            (username, day),
+        ).fetchone()
+    return row["note"] if row else ""
+
+
+def set_day_note(username, day, note):
+    note = note.strip()
+    with get_conn() as conn:
+        if note:
+            conn.execute(
+                """
+                INSERT INTO day_notes (username, day, note) VALUES (?, ?, ?)
+                ON CONFLICT(username, day) DO UPDATE SET note = excluded.note
+                """,
+                (username, day, note),
+            )
         else:
-            for e in sorted(day_expenses, key=lambda x: x["occurred_at"], reverse=True):
-                icon = CATEGORY_ICONS.get(e["category"], "📒")
-                dt = datetime.fromisoformat(e["occurred_at"])
-                col_a, col_b = st.columns([4, 1])
-                col_a.write(f"{icon} **{e['description']}** — {e['category']} · {dt.strftime('%I:%M %p')}")
-                col_b.write(money(e["amount"]))
-    else:
-        st.caption("Tap a day above to see what you spent on it.")
-
-
-# ---------------------------------------------------------------------------
-# Router
-# ---------------------------------------------------------------------------
-
-if st.session_state.username is None:
-    auth_screen()
-else:
-    _month = current_month()
-    _settings = db.get_budget(st.session_state.username, _month)
-    if _settings is None:
-        onboarding_screen(st.session_state.username, _month, db.get_currency(st.session_state.username))
-    else:
-        main_app(st.session_state.username, _month)
+            # An empty note means "nothing to show" - just remove the row.
+            conn.execute(
+                "DELETE FROM day_notes WHERE username = ? AND day = ?", (username, day)
+            )
