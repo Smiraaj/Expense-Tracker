@@ -14,6 +14,76 @@ import database as db
 
 st.set_page_config(page_title="Expense Tracker", page_icon="💰", layout="centered")
 
+
+def inject_dark_modern_css():
+    st.markdown("""
+    <style>
+    .stButton > button[kind="primary"],
+    [data-testid="stFormSubmitButton"] button[kind="primary"],
+    [data-testid="baseButton-primary"],
+    [data-testid="baseButton-primaryFormSubmit"] {
+        background: linear-gradient(90deg, #7C6FF0, #4A90E2) !important;
+        border: none !important;
+        color: #FFFFFF !important;
+    }
+    .stButton > button[kind="primary"]:hover,
+    [data-testid="stFormSubmitButton"] button[kind="primary"]:hover {
+        opacity: 0.92;
+    }
+    [data-baseweb="tab-list"] {
+        gap: 4px;
+        background: #161B45;
+        padding: 4px;
+        border-radius: 999px;
+    }
+    [data-baseweb="tab"] {
+        border-radius: 999px !important;
+        padding: 6px 18px !important;
+    }
+    [aria-selected="true"][data-baseweb="tab"] {
+        background: linear-gradient(90deg, #7C6FF0, #4A90E2) !important;
+        color: #FFFFFF !important;
+    }
+    .app-header-title {
+        font-size: 28px;
+        font-weight: 700;
+        margin: 0;
+    }
+    .app-header-title .accent {
+        background: linear-gradient(90deg, #7C6FF0, #4A90E2);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+    }
+    .app-header-tagline {
+        font-size: 12px;
+        color: #9AA0C3;
+        text-align: right;
+        line-height: 1.4;
+    }
+    /* Keep columns side-by-side on narrow phone screens instead of stacking
+       vertically - this is what fixes the calendar grid on mobile. */
+    [data-testid="stHorizontalBlock"] {
+        flex-wrap: nowrap !important;
+        gap: 4px !important;
+    }
+    [data-testid="stHorizontalBlock"] > [data-testid="column"] {
+        min-width: 0 !important;
+        width: 100% !important;
+        flex: 1 1 0 !important;
+    }
+    @media (max-width: 480px) {
+        [data-testid="stButton"] button {
+            padding: 0.25rem 0.15rem !important;
+            font-size: 12px !important;
+            min-height: 2.2rem !important;
+        }
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+
+inject_dark_modern_css()
+
 db.init_db()
 
 CATEGORIES = ["Food", "Transport", "Rent", "Bills", "Fun", "Health", "Shopping", "Other"]
@@ -23,8 +93,25 @@ CATEGORY_ICONS = {
 }
 
 
-def rupees(amount):
-    return f"₹{amount:,.2f}"
+CURRENCIES = {
+    "INR": {"symbol": "₹", "label": "Indian Rupee (₹)"},
+    "USD": {"symbol": "$", "label": "US Dollar ($)"},
+    "GBP": {"symbol": "£", "label": "British Pound (£)"},
+    "EUR": {"symbol": "€", "label": "Euro (€) — most of Europe"},
+    "AED": {"symbol": "AED ", "label": "UAE Dirham (AED) — Dubai/UAE"},
+    "CAD": {"symbol": "CA$", "label": "Canadian Dollar (CA$)"},
+    "DKK": {"symbol": "kr", "label": "Danish Krone (kr)"},
+    "AUD": {"symbol": "A$", "label": "Australian Dollar (A$)"},
+    "SGD": {"symbol": "S$", "label": "Singapore Dollar (S$)"},
+    "JPY": {"symbol": "¥", "label": "Japanese Yen (¥)", "decimals": 0},
+}
+DEFAULT_CURRENCY = "INR"
+
+
+def format_money(amount, currency_code):
+    info = CURRENCIES.get(currency_code, CURRENCIES[DEFAULT_CURRENCY])
+    decimals = info.get("decimals", 2)
+    return f"{info['symbol']}{amount:,.{decimals}f}"
 
 
 def current_month():
@@ -47,7 +134,18 @@ if "username" not in st.session_state:
 # ---------------------------------------------------------------------------
 
 def auth_screen():
-    st.title("💰 Expense Tracker")
+    header_left, header_right = st.columns([3, 2])
+    with header_left:
+        st.markdown(
+            '<p class="app-header-title">💰 Expense<br><span class="accent">Tracker</span></p>',
+            unsafe_allow_html=True,
+        )
+    with header_right:
+        st.markdown(
+            '<p class="app-header-tagline">Track Today<br>Build Tomorrow ↗</p>',
+            unsafe_allow_html=True,
+        )
+
     st.caption("No email or phone number is ever asked for — just a username and password.")
 
     tab_login, tab_signup = st.tabs(["Log in", "Sign up"])
@@ -71,13 +169,20 @@ def auth_screen():
             password = st.text_input("Choose a password", type="password", key="signup_password",
                                       help="At least 6 characters")
             confirm = st.text_input("Confirm password", type="password", key="signup_confirm")
+            currency_code = st.selectbox(
+                "Your currency",
+                options=list(CURRENCIES.keys()),
+                format_func=lambda code: CURRENCIES[code]["label"],
+                key="signup_currency",
+                help="You can change this later from the sidebar.",
+            )
             submitted = st.form_submit_button("Create account", width='stretch', type="primary")
             if submitted:
                 if password != confirm:
                     st.error("Passwords don't match.")
                 else:
                     try:
-                        db.create_user(username, password)
+                        db.create_user(username, password, currency=currency_code)
                         st.session_state.username = username.strip()
                         st.rerun()
                     except ValueError as e:
@@ -89,20 +194,34 @@ def auth_screen():
         icon="ℹ️",
     )
 
+    st.markdown("""
+    <div style="display:flex; justify-content:flex-end; margin-top:24px; opacity:0.75;">
+        <svg width="120" height="70" viewBox="0 0 120 70">
+            <rect x="0" y="40" width="14" height="30" rx="2" fill="#4A90E2"/>
+            <rect x="20" y="25" width="14" height="45" rx="2" fill="#7C6FF0"/>
+            <rect x="40" y="10" width="14" height="60" rx="2" fill="#4A90E2"/>
+            <rect x="60" y="30" width="14" height="40" rx="2" fill="#7C6FF0"/>
+            <circle cx="100" cy="15" r="9" fill="#F5C542"/>
+            <circle cx="108" cy="25" r="9" fill="#F5C542"/>
+        </svg>
+    </div>
+    """, unsafe_allow_html=True)
+
 
 # ---------------------------------------------------------------------------
 # Onboarding (first login, or a new month with no budget set yet)
 # ---------------------------------------------------------------------------
 
-def onboarding_screen(username, month):
+def onboarding_screen(username, month, currency_code):
+    symbol = CURRENCIES.get(currency_code, CURRENCIES[DEFAULT_CURRENCY])["symbol"]
     st.title("💰 Expense Tracker")
     st.subheader(f"Set up {month_label(month)}")
     st.write("A new month starts fresh. Set your budget and saving goal — last "
              "month's ledger stays saved for you to look back on anytime.")
 
     with st.form("onboard_form"):
-        budget = st.number_input("Monthly budget (₹)", min_value=1.0, step=100.0)
-        savings = st.number_input("Saving goal (₹)", min_value=0.0, step=100.0)
+        budget = st.number_input(f"Monthly budget ({symbol})", min_value=1.0, step=100.0)
+        savings = st.number_input(f"Saving goal ({symbol})", min_value=0.0, step=100.0)
         submitted = st.form_submit_button("Start tracking", width='stretch', type="primary")
         if submitted:
             if budget <= 0:
@@ -118,6 +237,9 @@ def onboarding_screen(username, month):
 
 def main_app(username, month):
     settings = db.get_budget(username, month)
+    currency_code = db.get_currency(username)
+    symbol = CURRENCIES.get(currency_code, CURRENCIES[DEFAULT_CURRENCY])["symbol"]
+    money = lambda amount: format_money(amount, currency_code)
 
     with st.sidebar:
         st.markdown(f"### 👤 {username}")
@@ -128,12 +250,26 @@ def main_app(username, month):
         st.divider()
         st.markdown(f"**Edit budget for {month_label(month)}**")
         with st.form("edit_budget_form"):
-            new_budget = st.number_input("Monthly budget (₹)", min_value=1.0, step=100.0,
+            new_budget = st.number_input(f"Monthly budget ({symbol})", min_value=1.0, step=100.0,
                                           value=float(settings["budget"]))
-            new_savings = st.number_input("Saving goal (₹)", min_value=0.0, step=100.0,
+            new_savings = st.number_input(f"Saving goal ({symbol})", min_value=0.0, step=100.0,
                                            value=float(settings["savings"]))
             if st.form_submit_button("Save", width='stretch'):
                 db.set_budget(username, month, new_budget, new_savings)
+                st.rerun()
+
+        st.divider()
+        st.markdown("**Currency**")
+        with st.form("currency_form"):
+            new_currency = st.selectbox(
+                "Preferred currency",
+                options=list(CURRENCIES.keys()),
+                index=list(CURRENCIES.keys()).index(currency_code) if currency_code in CURRENCIES else 0,
+                format_func=lambda code: CURRENCIES[code]["label"],
+                label_visibility="collapsed",
+            )
+            if st.form_submit_button("Update currency", width='stretch'):
+                db.set_currency(username, new_currency)
                 st.rerun()
 
     all_expenses = db.get_expenses(username)
@@ -153,17 +289,17 @@ def main_app(username, month):
     # ------------------------------ HOME ------------------------------
     with tab_home:
         c1, c2 = st.columns(2)
-        c1.metric("Remaining this month", rupees(remaining))
-        c2.metric("Spent so far", rupees(spent))
+        c1.metric("Remaining this month", money(remaining))
+        c2.metric("Spent so far", money(spent))
 
         pct_used = min(1.0, spent / settings["budget"]) if settings["budget"] > 0 else 0
         st.progress(pct_used)
         if remaining < 0:
-            st.warning(f"You've gone {rupees(abs(remaining))} over budget this month.")
+            st.warning(f"You've gone {money(abs(remaining))} over budget this month.")
 
         c3, c4 = st.columns(2)
-        c3.metric("Saving goal", rupees(settings["savings"]))
-        c4.metric("Daily avg", rupees(daily_avg))
+        c3.metric("Saving goal", money(settings["savings"]))
+        c4.metric("Daily avg", money(daily_avg))
 
         st.markdown("#### Recent entries")
         recent = month_expenses[:5]
@@ -175,14 +311,14 @@ def main_app(username, month):
                 dt = datetime.fromisoformat(e["occurred_at"])
                 col_a, col_b = st.columns([4, 1])
                 col_a.write(f"{icon} **{e['description']}** — {e['category']} · {dt.strftime('%d %b, %I:%M %p')}")
-                col_b.write(rupees(e["amount"]))
+                col_b.write(money(e["amount"]))
 
     # ------------------------------ ADD ------------------------------
     with tab_add:
         with st.form("add_expense_form", clear_on_submit=True):
             description = st.text_input("What was it for")
             category = st.selectbox("Category", CATEGORIES)
-            amount = st.number_input("Amount (₹)", min_value=0.01, step=10.0)
+            amount = st.number_input(f"Amount ({symbol})", min_value=0.01, step=10.0)
             submitted = st.form_submit_button("Add to ledger", width='stretch', type="primary")
             if submitted:
                 if not description.strip():
@@ -206,13 +342,13 @@ def main_app(username, month):
                 "Date & time": df["occurred_at"].dt.strftime("%d %b %Y, %I:%M %p"),
                 "Description": df["description"],
                 "Category": df["category"],
-                "Amount": df["amount"].apply(rupees),
+                "Amount": df["amount"].apply(money),
             })
             st.dataframe(df_display, width='stretch', hide_index=True)
 
     # ------------------------------ CALENDAR ------------------------------
     with tab_calendar:
-        render_calendar_tab(username, month, daily_avg, all_expenses)
+        render_calendar_tab(username, month, daily_avg, all_expenses, money)
 
     # ------------------------------ CATEGORIES ------------------------------
     with tab_categories:
@@ -235,14 +371,14 @@ def main_app(username, month):
 
             for cat, amt in cat_items:
                 icon = CATEGORY_ICONS.get(cat, "📒")
-                st.write(f"{icon} **{cat}** — {rupees(amt)}")
+                st.write(f"{icon} **{cat}** — {money(amt)}")
 
 
 # ---------------------------------------------------------------------------
 # Calendar tab
 # ---------------------------------------------------------------------------
 
-def render_calendar_tab(username, month, daily_avg, all_expenses):
+def render_calendar_tab(username, month, daily_avg, all_expenses, money):
     if "calendar_view_month" not in st.session_state:
         st.session_state.calendar_view_month = month  # 'YYYY-MM'
     if "calendar_selected_day" not in st.session_state:
@@ -281,7 +417,7 @@ def render_calendar_tab(username, month, daily_avg, all_expenses):
     if view_daily_avg is None:
         st.caption("No budget was set for this month, so there's nothing to compare days against.")
     else:
-        st.caption(f"Days spending over {rupees(view_daily_avg)} (this month's Daily Avg) are shown in red.")
+        st.caption(f"Days spending over {money(view_daily_avg)} (this month's Daily Avg) are shown in red.")
 
     weekday_cols = st.columns(7)
     for col, name in zip(weekday_cols, ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]):
@@ -316,7 +452,7 @@ def render_calendar_tab(username, month, daily_avg, all_expenses):
         day_expenses = [e for e in all_expenses if e["occurred_at"][:10] == selected]
         pretty_date = datetime.strptime(selected, "%Y-%m-%d").strftime("%d %B %Y")
         day_total = sum(e["amount"] for e in day_expenses)
-        st.markdown(f"#### {pretty_date} — {rupees(day_total)}")
+        st.markdown(f"#### {pretty_date} — {money(day_total)}")
         if not day_expenses:
             st.caption("No expenses logged on this day.")
         else:
@@ -325,7 +461,7 @@ def render_calendar_tab(username, month, daily_avg, all_expenses):
                 dt = datetime.fromisoformat(e["occurred_at"])
                 col_a, col_b = st.columns([4, 1])
                 col_a.write(f"{icon} **{e['description']}** — {e['category']} · {dt.strftime('%I:%M %p')}")
-                col_b.write(rupees(e["amount"]))
+                col_b.write(money(e["amount"]))
     else:
         st.caption("Tap a day above to see what you spent on it.")
 
@@ -340,6 +476,6 @@ else:
     _month = current_month()
     _settings = db.get_budget(st.session_state.username, _month)
     if _settings is None:
-        onboarding_screen(st.session_state.username, _month)
+        onboarding_screen(st.session_state.username, _month, db.get_currency(st.session_state.username))
     else:
         main_app(st.session_state.username, _month)
