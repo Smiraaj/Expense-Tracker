@@ -34,6 +34,12 @@ def init_db():
                 created_at TEXT NOT NULL
             )
         """)
+        # Migration: add a currency column for accounts created before this
+        # feature existed. Safe to run every time - it's a no-op once added.
+        try:
+            conn.execute("ALTER TABLE users ADD COLUMN currency TEXT NOT NULL DEFAULT 'INR'")
+        except sqlite3.OperationalError:
+            pass  # column already exists
         conn.execute("""
             CREATE TABLE IF NOT EXISTS expenses (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -67,7 +73,7 @@ def username_exists(username):
         return row is not None
 
 
-def create_user(username, password):
+def create_user(username, password, currency="INR"):
     username = username.strip()
     if len(username) < 3:
         raise ValueError("Username must be at least 3 characters.")
@@ -79,8 +85,23 @@ def create_user(username, password):
     password_hash = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
     with get_conn() as conn:
         conn.execute(
-            "INSERT INTO users (username, password_hash, created_at) VALUES (?, ?, ?)",
-            (username, password_hash, datetime.now().isoformat()),
+            "INSERT INTO users (username, password_hash, created_at, currency) VALUES (?, ?, ?, ?)",
+            (username, password_hash, datetime.now().isoformat(), currency),
+        )
+
+
+def get_currency(username):
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT currency FROM users WHERE username = ?", (username,)
+        ).fetchone()
+    return row["currency"] if row else "INR"
+
+
+def set_currency(username, currency):
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE users SET currency = ? WHERE username = ?", (currency, username)
         )
 
 
