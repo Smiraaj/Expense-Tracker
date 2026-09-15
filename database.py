@@ -59,6 +59,14 @@ def init_db():
                 PRIMARY KEY (username, month)
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS day_notes (
+                username TEXT NOT NULL REFERENCES users(username) ON DELETE CASCADE,
+                day TEXT NOT NULL,
+                note TEXT NOT NULL DEFAULT '',
+                PRIMARY KEY (username, day)
+            )
+        """)
 
 
 # ---------------------------------------------------------------------------
@@ -163,3 +171,34 @@ def set_budget(username, month, budget, savings):
             """,
             (username, month, budget, savings),
         )
+
+
+# ---------------------------------------------------------------------------
+# Day notes (e.g. "outing day, that's why spending was high")
+# ---------------------------------------------------------------------------
+
+def get_day_note(username, day):
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT note FROM day_notes WHERE username = ? AND day = ?",
+            (username, day),
+        ).fetchone()
+    return row["note"] if row else ""
+
+
+def set_day_note(username, day, note):
+    note = note.strip()
+    with get_conn() as conn:
+        if note:
+            conn.execute(
+                """
+                INSERT INTO day_notes (username, day, note) VALUES (?, ?, ?)
+                ON CONFLICT(username, day) DO UPDATE SET note = excluded.note
+                """,
+                (username, day, note),
+            )
+        else:
+            # An empty note means "nothing to show" - just remove the row.
+            conn.execute(
+                "DELETE FROM day_notes WHERE username = ? AND day = ?", (username, day)
+            )
