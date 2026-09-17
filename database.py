@@ -1,65 +1,82 @@
 """
 Database layer for Expense Tracker.
-Uses a local SQLite file (expense_tracker.db) - no external service needed.
+Uses a real, persistent Postgres database (e.g. a free Supabase project's
+database) instead of a local file - so data survives app restarts, sleeps,
+and redeploys on Streamlit Community Cloud, none of which a local SQLite
+file can survive there.
+
 Every function is careful to only touch the data belonging to the given
 username, so multiple people can safely share one deployment.
 """
 
-import sqlite3
 import bcrypt
+import streamlit as st
+import psycopg2
+import psycopg2.extras
+from psycopg2.pool import ThreadedConnectionPool
 from datetime import datetime
 from contextlib import contextmanager
 
-DB_PATH = "expense_tracker.db"
+
+@st.cache_resource
+def _get_pool():
+    """One shared connection pool per app instance, reused across reruns."""
+    db_url = st.secrets["DATABASE_URL"]
+    return ThreadedConnectionPool(minconn=1, maxconn=5, dsn=db_url)
 
 
 @contextmanager
 def get_conn():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
+    pool = _get_pool()
+    conn = pool.getconn()
     try:
         yield conn
         conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     finally:
-        conn.close()
+        pool.putconn(conn)
+
+
+def _dict_cursor(conn):
+    return conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
 
 def init_db():
     with get_conn() as conn:
-        conn.execute("""
+        cur = conn.cursor()
+        cur.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 username TEXT PRIMARY KEY,
                 password_hash TEXT NOT NULL,
-                created_at TEXT NOT NULL
+                created_at TEXT NOT NULL,
+                currency TEXT NOT NULL DEFAULT 'INR'
             )
         """)
-        # Migration: add a currency column for accounts created before this
-        # feature existed. Safe to run every time - it's a no-op once added.
-        try:
-            conn.execute("ALTER TABLE users ADD COLUMN currency TEXT NOT NULL DEFAULT 'INR'")
-        except sqlite3.OperationalError:
-            pass  # column already exists
-        conn.execute("""
+        # Safe to run every time - a no-op once the column already exists.
+        cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS currency TEXT NOT NULL DEFAULT 'INR'")
+
+        cur.execute("""
             CREATE TABLE IF NOT EXISTS expenses (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id SERIAL PRIMARY KEY,
                 username TEXT NOT NULL REFERENCES users(username) ON DELETE CASCADE,
                 description TEXT NOT NULL,
                 category TEXT NOT NULL,
-                amount REAL NOT NULL CHECK (amount > 0),
+                amount NUMERIC(12,2) NOT NULL CHECK (amount > 0),
                 occurred_at TEXT NOT NULL
             )
         """)
-        conn.execute("""
+        cur.execute("""
             CREATE TABLE IF NOT EXISTS budgets (
                 username TEXT NOT NULL REFERENCES users(username) ON DELETE CASCADE,
                 month TEXT NOT NULL,
-                budget REAL NOT NULL CHECK (budget > 0),
-                savings REAL NOT NULL DEFAULT 0 CHECK (savings >= 0),
+                budget NUMERIC(12,2) NOT NULL CHECK (budget > 0),
+                savings NUMERIC(12,2) NOT NULL DEFAULT 0 CHECK (savings >= 0),
                 PRIMARY KEY (username, month)
             )
         """)
-        conn.execute("""
+        cur.execute("""
             CREATE TABLE IF NOT EXISTS day_notes (
                 username TEXT NOT NULL REFERENCES users(username) ON DELETE CASCADE,
                 day TEXT NOT NULL,
@@ -67,6 +84,7 @@ def init_db():
                 PRIMARY KEY (username, day)
             )
         """)
+        cur.close()
 
 
 # ---------------------------------------------------------------------------
@@ -75,9 +93,10 @@ def init_db():
 
 def username_exists(username):
     with get_conn() as conn:
-        row = conn.execute(
-            "SELECT 1 FROM users WHERE lower(username) = lower(?)", (username,)
-        ).fetchone()
+        cur = _dict_cursor(conn)
+        cur.execute("SELECT 1 FROM users WHERE lower(username) = lower(%s)", (username,))
+        row = cur.fetchone()
+        cur.close()
         return row is not None
 
 
@@ -92,33 +111,39 @@ def create_user(username, password, currency="INR"):
 
     password_hash = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
     with get_conn() as conn:
-        conn.execute(
-            "INSERT INTO users (username, password_hash, created_at, currency) VALUES (?, ?, ?, ?)",
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO users (username, password_hash, created_at, currency) VALUES (%s, %s, %s, %s)",
             (username, password_hash, datetime.now().isoformat(), currency),
         )
+        cur.close()
 
 
 def get_currency(username):
     with get_conn() as conn:
-        row = conn.execute(
-            "SELECT currency FROM users WHERE username = ?", (username,)
-        ).fetchone()
+        cur = _dict_cursor(conn)
+        cur.execute("SELECT currency FROM users WHERE username = %s", (username,))
+        row = cur.fetchone()
+        cur.close()
     return row["currency"] if row else "INR"
 
 
 def set_currency(username, currency):
     with get_conn() as conn:
-        conn.execute(
-            "UPDATE users SET currency = ? WHERE username = ?", (currency, username)
-        )
+        cur = conn.cursor()
+        cur.execute("UPDATE users SET currency = %s WHERE username = %s", (currency, username))
+        cur.close()
 
 
 def verify_login(username, password):
     with get_conn() as conn:
-        row = conn.execute(
-            "SELECT username, password_hash FROM users WHERE lower(username) = lower(?)",
+        cur = _dict_cursor(conn)
+        cur.execute(
+            "SELECT username, password_hash FROM users WHERE lower(username) = lower(%s)",
             (username.strip(),),
-        ).fetchone()
+        )
+        row = cur.fetchone()
+        cur.close()
     if row is None:
         raise ValueError("Incorrect username or password.")
     if not bcrypt.checkpw(password.encode("utf-8"), row["password_hash"].encode("utf-8")):
@@ -132,21 +157,26 @@ def verify_login(username, password):
 
 def add_expense(username, description, category, amount):
     with get_conn() as conn:
-        conn.execute(
+        cur = conn.cursor()
+        cur.execute(
             "INSERT INTO expenses (username, description, category, amount, occurred_at) "
-            "VALUES (?, ?, ?, ?, ?)",
+            "VALUES (%s, %s, %s, %s, %s)",
             (username, description.strip(), category, round(float(amount), 2), datetime.now().isoformat()),
         )
+        cur.close()
 
 
 def get_expenses(username):
     with get_conn() as conn:
-        rows = conn.execute(
+        cur = _dict_cursor(conn)
+        cur.execute(
             "SELECT id, description, category, amount, occurred_at "
-            "FROM expenses WHERE username = ? ORDER BY occurred_at DESC",
+            "FROM expenses WHERE username = %s ORDER BY occurred_at DESC",
             (username,),
-        ).fetchall()
-    return [dict(r) for r in rows]
+        )
+        rows = cur.fetchall()
+        cur.close()
+    return [{**dict(r), "amount": float(r["amount"])} for r in rows]
 
 
 # ---------------------------------------------------------------------------
@@ -155,22 +185,29 @@ def get_expenses(username):
 
 def get_budget(username, month):
     with get_conn() as conn:
-        row = conn.execute(
-            "SELECT budget, savings FROM budgets WHERE username = ? AND month = ?",
+        cur = _dict_cursor(conn)
+        cur.execute(
+            "SELECT budget, savings FROM budgets WHERE username = %s AND month = %s",
             (username, month),
-        ).fetchone()
-    return dict(row) if row else None
+        )
+        row = cur.fetchone()
+        cur.close()
+    if row is None:
+        return None
+    return {"budget": float(row["budget"]), "savings": float(row["savings"])}
 
 
 def set_budget(username, month, budget, savings):
     with get_conn() as conn:
-        conn.execute(
+        cur = conn.cursor()
+        cur.execute(
             """
-            INSERT INTO budgets (username, month, budget, savings) VALUES (?, ?, ?, ?)
-            ON CONFLICT(username, month) DO UPDATE SET budget = excluded.budget, savings = excluded.savings
+            INSERT INTO budgets (username, month, budget, savings) VALUES (%s, %s, %s, %s)
+            ON CONFLICT (username, month) DO UPDATE SET budget = excluded.budget, savings = excluded.savings
             """,
             (username, month, budget, savings),
         )
+        cur.close()
 
 
 # ---------------------------------------------------------------------------
@@ -179,26 +216,30 @@ def set_budget(username, month, budget, savings):
 
 def get_day_note(username, day):
     with get_conn() as conn:
-        row = conn.execute(
-            "SELECT note FROM day_notes WHERE username = ? AND day = ?",
+        cur = _dict_cursor(conn)
+        cur.execute(
+            "SELECT note FROM day_notes WHERE username = %s AND day = %s",
             (username, day),
-        ).fetchone()
+        )
+        row = cur.fetchone()
+        cur.close()
     return row["note"] if row else ""
 
 
 def set_day_note(username, day, note):
     note = note.strip()
     with get_conn() as conn:
+        cur = conn.cursor()
         if note:
-            conn.execute(
+            cur.execute(
                 """
-                INSERT INTO day_notes (username, day, note) VALUES (?, ?, ?)
-                ON CONFLICT(username, day) DO UPDATE SET note = excluded.note
+                INSERT INTO day_notes (username, day, note) VALUES (%s, %s, %s)
+                ON CONFLICT (username, day) DO UPDATE SET note = excluded.note
                 """,
                 (username, day, note),
             )
         else:
-            # An empty note means "nothing to show" - just remove the row.
-            conn.execute(
-                "DELETE FROM day_notes WHERE username = ? AND day = ?", (username, day)
+            cur.execute(
+                "DELETE FROM day_notes WHERE username = %s AND day = %s", (username, day)
             )
+        cur.close()
