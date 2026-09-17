@@ -467,7 +467,8 @@ def render_calendar_tab(username, month, daily_avg, all_expenses, money):
                 col_b.write(money(e["amount"]))
 
         st.markdown("###### 📝 Note for this day")
-        st.caption("Jot down why spending was high (or low) - e.g. \"Outing day, that's why pizza was extra.\"")
+        st.caption("Add context for this day's spending, if you want (optional). "
+                    "For example: an outing, a one-off bill, a trip - whatever explains it.")
         existing_note = db.get_day_note(username, selected)
         with st.form(f"note_form_{selected}"):
             note_text = st.text_area(
@@ -477,7 +478,6 @@ def render_calendar_tab(username, month, daily_avg, all_expenses, money):
             if st.form_submit_button("Save note", width='stretch'):
                 db.set_day_note(username, selected, note_text)
                 st.success("Note saved!")
-                st.rerun()
     else:
         st.caption("Tap a day above to see what you spent on it.")
 
