@@ -21,17 +21,6 @@ from contextlib import contextmanager
 @st.cache_resource
 def _get_pool():
     """One shared connection pool per app instance, reused across reruns."""
-    if "DATABASE_URL" not in st.secrets:
-        st.error(
-            "🔑 **`DATABASE_URL` is missing from Streamlit secrets.**\n\n"
-            "Please go to **Manage app** → **Settings** → **Secrets** on Streamlit Cloud "
-            "and add your database URL:\n\n"
-            "```toml\n"
-            'DATABASE_URL = "postgresql://user:password@host:5432/dbname"\n'
-            "```"
-        )
-        st.stop()
-        
     db_url = st.secrets["DATABASE_URL"]
     return ThreadedConnectionPool(minconn=1, maxconn=5, dsn=db_url)
 
@@ -168,13 +157,16 @@ def verify_login(username, password):
 
 def add_expense(username, description, category, amount):
     with get_conn() as conn:
-        cur = conn.cursor()
+        cur = _dict_cursor(conn)
         cur.execute(
             "INSERT INTO expenses (username, description, category, amount, occurred_at) "
-            "VALUES (%s, %s, %s, %s, %s)",
+            "VALUES (%s, %s, %s, %s, %s) "
+            "RETURNING id, description, category, amount, occurred_at",
             (username, description.strip(), category, round(float(amount), 2), datetime.now().isoformat()),
         )
+        row = cur.fetchone()
         cur.close()
+    return {**dict(row), "amount": float(row["amount"])}
 
 
 def get_expenses(username):
