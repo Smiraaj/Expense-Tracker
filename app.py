@@ -84,7 +84,13 @@ def inject_dark_modern_css():
 
 inject_dark_modern_css()
 
-db.init_db()
+@st.cache_resource
+def _initialize_database():
+    db.init_db()
+    return True
+
+
+_initialize_database()
 
 CATEGORIES = ["Food", "Transport", "Rent", "Bills", "Fun", "Health", "Shopping", "Other"]
 CATEGORY_ICONS = {
@@ -131,6 +137,67 @@ def month_label(key):
 
 if "username" not in st.session_state:
     st.session_state.username = None
+
+
+# ---------------------------------------------------------------------------
+# Session-level cache
+# ---------------------------------------------------------------------------
+# Streamlit reruns the whole script on almost every interaction. Without
+# caching, that meant re-fetching currency + budget + every expense from
+# Supabase on every single click, even for actions that touch none of that
+# data - which is what was making the app feel slow over a network database.
+# Instead we load each user's data once per login, keep it in memory for the
+# rest of the session, and update it locally (not by re-querying) whenever
+# something is saved. The database is still the source of truth - this is
+# just avoiding needless repeat reads within one session.
+
+def ensure_cache(username):
+    if st.session_state.get("cache_username") != username:
+        st.session_state.cache_username = username
+        st.session_state.cache_currency = db.get_currency(username)
+        st.session_state.cache_expenses = db.get_expenses(username)
+        st.session_state.cache_budgets = {}
+        st.session_state.cache_notes = {}
+
+
+def get_cached_budget(username, month):
+    budgets = st.session_state.cache_budgets
+    if month not in budgets:
+        budgets[month] = db.get_budget(username, month)
+    return budgets[month]
+
+
+def save_cached_budget(username, month, budget, savings):
+    db.set_budget(username, month, budget, savings)
+    st.session_state.cache_budgets[month] = {"budget": budget, "savings": savings}
+
+
+def save_cached_currency(username, currency_code):
+    db.set_currency(username, currency_code)
+    st.session_state.cache_currency = currency_code
+
+
+def add_cached_expense(username, description, category, amount):
+    new_row = db.add_expense(username, description, category, amount)
+    st.session_state.cache_expenses.insert(0, new_row)
+
+
+def get_cached_note(username, day):
+    notes = st.session_state.cache_notes
+    if day not in notes:
+        notes[day] = db.get_day_note(username, day)
+    return notes[day]
+
+
+def save_cached_note(username, day, note_text):
+    db.set_day_note(username, day, note_text)
+    st.session_state.cache_notes[day] = note_text.strip()
+
+
+def clear_cache():
+    for key in ["cache_username", "cache_currency", "cache_expenses", "cache_budgets", "cache_notes"]:
+        st.session_state.pop(key, None)
+
 
 # ---------------------------------------------------------------------------
 # Auth screen
@@ -216,6 +283,7 @@ def auth_screen():
 # ---------------------------------------------------------------------------
 
 def onboarding_screen(username, month, currency_code):
+    ensure_cache(username)
     symbol = CURRENCIES.get(currency_code, CURRENCIES[DEFAULT_CURRENCY])["symbol"]
     st.title("💰 Expense Tracker")
     st.subheader(f"Set up {month_label(month)}")
@@ -230,7 +298,7 @@ def onboarding_screen(username, month, currency_code):
             if budget <= 0:
                 st.error("Enter a valid monthly budget.")
             else:
-                db.set_budget(username, month, budget, savings)
+                save_cached_budget(username, month, budget, savings)
                 st.rerun()
 
 
@@ -239,8 +307,9 @@ def onboarding_screen(username, month, currency_code):
 # ---------------------------------------------------------------------------
 
 def main_app(username, month):
-    settings = db.get_budget(username, month)
-    currency_code = db.get_currency(username)
+    ensure_cache(username)
+    settings = get_cached_budget(username, month)
+    currency_code = st.session_state.cache_currency
     symbol = CURRENCIES.get(currency_code, CURRENCIES[DEFAULT_CURRENCY])["symbol"]
     money = lambda amount: format_money(amount, currency_code)
 
@@ -248,6 +317,7 @@ def main_app(username, month):
         st.markdown(f"### 👤 {username}")
         if st.button("Log out", width='stretch'):
             st.session_state.username = None
+            clear_cache()
             st.rerun()
 
         st.divider()
@@ -258,7 +328,7 @@ def main_app(username, month):
             new_savings = st.number_input(f"Saving goal ({symbol})", min_value=0.0, step=100.0,
                                            value=float(settings["savings"]))
             if st.form_submit_button("Save", width='stretch'):
-                db.set_budget(username, month, new_budget, new_savings)
+                save_cached_budget(username, month, new_budget, new_savings)
                 st.rerun()
 
         st.divider()
@@ -272,10 +342,10 @@ def main_app(username, month):
                 label_visibility="collapsed",
             )
             if st.form_submit_button("Update currency", width='stretch'):
-                db.set_currency(username, new_currency)
+                save_cached_currency(username, new_currency)
                 st.rerun()
 
-    all_expenses = db.get_expenses(username)
+    all_expenses = st.session_state.cache_expenses
     month_expenses = [e for e in all_expenses if e["occurred_at"][:7] == month]
 
     spent = sum(e["amount"] for e in month_expenses)
@@ -329,7 +399,7 @@ def main_app(username, month):
                 elif amount <= 0:
                     st.error("Amount must be a positive number.")
                 else:
-                    db.add_expense(username, description, category, amount)
+                    add_cached_expense(username, description, category, amount)
                     st.success("Expense added!")
                     st.rerun()
 
@@ -405,7 +475,7 @@ def render_calendar_tab(username, month, daily_avg, all_expenses, money):
         st.rerun()
 
     # Daily avg only really applies to the month it was set for.
-    view_settings = db.get_budget(username, view_month)
+    view_settings = get_cached_budget(username, view_month)
     view_daily_avg = (
         (view_settings["budget"] - view_settings["savings"]) / 30 if view_settings else None
     )
@@ -469,14 +539,14 @@ def render_calendar_tab(username, month, daily_avg, all_expenses, money):
         st.markdown("###### 📝 Note for this day")
         st.caption("Add context for this day's spending, if you want (optional). "
                     "For example: an outing, a one-off bill, a trip - whatever explains it.")
-        existing_note = db.get_day_note(username, selected)
+        existing_note = get_cached_note(username, selected)
         with st.form(f"note_form_{selected}"):
             note_text = st.text_area(
                 "Note", value=existing_note, key=f"note_input_{selected}",
                 label_visibility="collapsed", placeholder="Add a note for this day...",
             )
             if st.form_submit_button("Save note", width='stretch'):
-                db.set_day_note(username, selected, note_text)
+                save_cached_note(username, selected, note_text)
                 st.success("Note saved!")
     else:
         st.caption("Tap a day above to see what you spent on it.")
@@ -489,9 +559,10 @@ def render_calendar_tab(username, month, daily_avg, all_expenses, money):
 if st.session_state.username is None:
     auth_screen()
 else:
+    ensure_cache(st.session_state.username)
     _month = current_month()
-    _settings = db.get_budget(st.session_state.username, _month)
+    _settings = get_cached_budget(st.session_state.username, _month)
     if _settings is None:
-        onboarding_screen(st.session_state.username, _month, db.get_currency(st.session_state.username))
+        onboarding_screen(st.session_state.username, _month, st.session_state.cache_currency)
     else:
         main_app(st.session_state.username, _month)
